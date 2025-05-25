@@ -539,6 +539,38 @@ where
     (on_ground || in_liquid) && !a.is_solid() && !b.is_solid()
 }
 
+fn is_laterally_clear<V: BaseVol<Vox = Block> + ReadVol>(
+    vol: &V,
+    target_node_pos: Vec3<i32>, // The candidate next position in the path
+    move_dir_xy: Vec2<i32>    // The XY direction of movement to reach target_node_pos
+) -> bool {
+    if move_dir_xy.x.abs() + move_dir_xy.y.abs() != 1 {
+        // This check is primarily for cardinal moves.
+        // For diagonal moves, this simple check isn't sufficient,
+        // but current A* DIRS don't seem to produce direct diagonal steps.
+        // If they did, more sophisticated clearance checks would be needed.
+        // For now, assume true for non-cardinal or zero moves.
+        return true;
+    }
+
+    let perp_dir1 = Vec2::new(move_dir_xy.y, -move_dir_xy.x);
+    let perp_dir2 = Vec2::new(-move_dir_xy.y, move_dir_xy.x);
+
+    let side_pos1 = target_node_pos + Vec3::new(perp_dir1.x, perp_dir1.y, 0);
+    let side_pos2 = target_node_pos + Vec3::new(perp_dir2.x, perp_dir2.y, 0);
+
+    // Check if the side positions are not solid at the same level and head level.
+    // This is a simplified check. A full `walkable` check might be too restrictive
+    // if the side blocks don't have ground beneath them (e.g. path next to a ledge).
+    // We primarily care that they are not walls.
+    let check_side = |p: Vec3<i32>| {
+        !vol.get(p).map_or(true, |b| b.is_solid()) &&
+        !vol.get(p + Vec3::unit_z()).map_or(true, |b| b.is_solid())
+    };
+    
+    check_side(side_pos1) && check_side(side_pos2)
+}
+
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Node {
     pos: Vec3<i32>,
@@ -657,29 +689,48 @@ where
                     .flatten(),
             )
             .map(move |dir| (pos, dir))
-            .filter(move |(pos, dir)| {
-                (traversal_cfg.can_fly || is_walkable(pos) && is_walkable(&(*pos + **dir)))
-                    && ((dir.z < 1
+            .filter(move |(current_node_block_pos, move_dir_from_current)| {
+                let target_node_block_pos = *current_node_block_pos + **move_dir_from_current;
+                
+                // Original walkability check for the direct path segment
+                let main_path_walkable = traversal_cfg.can_fly || 
+                    (is_walkable(current_node_block_pos) && is_walkable(&target_node_block_pos));
+
+                // New lateral clearance check
+                let lateral_clearance_ok = if move_dir_from_current.z == 0 && (move_dir_from_current.x != 0 || move_dir_from_current.y != 0) {
+                    // It's a horizontal move in XY plane
+                    is_laterally_clear(vol, target_node_block_pos, move_dir_from_current.xy())
+                } else {
+                    // Not a purely horizontal XY move, or no XY movement, so skip lateral check for now.
+                    // Vertical or pure Z moves don't need this specific lateral check.
+                    true 
+                };
+
+                // Existing Z-clearance checks (for jumps/falls and headroom)
+                let z_clearance_ok = (move_dir_from_current.z < 1
+                    || vol
+                        .get(*current_node_block_pos + Vec3::unit_z() * 2)
+                        .map(|b| !b.is_solid())
+                        .unwrap_or(traversal_cfg.is_target_loaded))
+                    && (move_dir_from_current.z < 2
                         || vol
-                            .get(pos + Vec3::unit_z() * 2)
+                            .get(*current_node_block_pos + Vec3::unit_z() * 3)
                             .map(|b| !b.is_solid())
                             .unwrap_or(traversal_cfg.is_target_loaded))
-                        && (dir.z < 2
-                            || vol
-                                .get(pos + Vec3::unit_z() * 3)
-                                .map(|b| !b.is_solid())
-                                .unwrap_or(traversal_cfg.is_target_loaded))
-                        && (dir.z >= 0
-                            || vol
-                                .get(pos + *dir + Vec3::unit_z() * 2)
-                                .map(|b| !b.is_solid())
-                                .unwrap_or(traversal_cfg.is_target_loaded)))
+                    && (move_dir_from_current.z >= 0 // Original check for falling/stepping down
+                        || vol 
+                            .get(target_node_block_pos + Vec3::unit_z() * 2) // Check headroom at destination of a downward step
+                            .map(|b| !b.is_solid())
+                            .unwrap_or(traversal_cfg.is_target_loaded));
+
+                main_path_walkable && lateral_clearance_ok && z_clearance_ok
             })
-            .map(move |(pos, dir)| {
+            .map(move |(current_node_block_pos, move_dir_from_current)| {
                 let next_node = Node {
-                    pos: pos + dir,
-                    last_dir: dir.xy(),
-                    last_dir_count: if node.last_dir == dir.xy() {
+                    pos: *current_node_block_pos + *move_dir_from_current,
+                    pos: *current_node_block_pos + *move_dir_from_current,
+                    last_dir: move_dir_from_current.xy(),
+                    last_dir_count: if node.last_dir == move_dir_from_current.xy() {
                         node.last_dir_count + 1
                     } else {
                         0
