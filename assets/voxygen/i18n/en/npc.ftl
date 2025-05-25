@@ -542,3 +542,5 @@ npc-speech-pilot-continue_hold =
 ## Signs
 
 npc-signs-keep_out =  Keep Out!
+npc-speech-seeking_shelter_rain = It's starting to rain, I should find some shelter.
+npc-speech-rain_stopped = The rain has stopped, back to it!
