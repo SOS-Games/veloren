@@ -61,7 +61,7 @@ use common::{
     terrain::{CoordinateConversions, TerrainChunkSize, sprite},
     time::DayPeriod,
     util::Dir,
-    weather::WeatherKind,
+    weather::{WeatherGrid, WeatherKind},
 };
 use core::ops::ControlFlow;
 use fxhash::FxHasher64;
@@ -519,7 +519,8 @@ fn villager(visiting_site: SiteId) -> impl Action<DefaultState> {
                 .then(just(move |ctx, _| ctx.controller.set_new_home(new_home))));
         }
 
-        let weather = ctx.world.weather().get_interpolated(ctx.npc.wpos.xy());
+        let weather_grid = ctx.state.resource::<common::weather::WeatherGrid>();
+        let weather = weather_grid.get_interpolated(ctx.npc.wpos.xy());
         let weather_kind = weather.get_kind();
         let day_period = DayPeriod::from(ctx.time_of_day.0);
         let is_weekend = ctx.time_of_day.day() as u64 % 6 == 0;
@@ -558,7 +559,8 @@ fn villager(visiting_site: SiteId) -> impl Action<DefaultState> {
                                 .map_state(|state: &mut DefaultState| &mut state.socialize_timer)
                                 .debug(|| "villager waiting in house due to rain") // Updated debug message
                                 .stop_if(|ctx: &mut NpcCtx| {
-                                    let weather = ctx.world.weather().get_interpolated(ctx.npc.wpos.xy());
+                                    let weather_grid = ctx.state.resource::<common::weather::WeatherGrid>();
+                                    let weather = weather_grid.get_interpolated(ctx.npc.wpos.xy());
                                     let weather_kind = weather.get_kind();
                                     weather_kind != WeatherKind::Rain
                                 })
