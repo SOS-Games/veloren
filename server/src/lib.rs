@@ -348,8 +348,8 @@ impl Server {
                 sys::add_server_systems(dispatcher_builder);
                 #[cfg(feature = "worldgen")]
                 {
-                    rtsim::add_server_systems(dispatcher_builder);
-                    weather::add_server_systems(dispatcher_builder);
+                    weather::add_server_systems(dispatcher_builder); // MOVED UP
+                    rtsim::add_server_systems(dispatcher_builder); // MOVED DOWN
                 }
             },
             #[cfg(feature = "plugins")]
