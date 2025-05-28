@@ -262,4 +262,26 @@ impl WeatherGrid {
             // There will always be 9 elements in locality
             .unwrap()
     }
+
+    pub fn is_raining(&self, wpos: Vec2<f32>) -> bool {
+        let v = Vec2::new(512.0, 512.0);
+        let cell_pos: Vec2<i32> = to_cell_pos(wpos + v).as_();
+        let weather = LOCALITY
+            .iter()
+            .map(|l| {
+                self.weather
+                    .get(cell_pos + l)
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .reduce(|a, b| Weather {
+                cloud: a.cloud.max(b.cloud),
+                rain: a.rain.max(b.rain),
+                wind: a.wind.map2(b.wind, |a, b| a.max(b)),
+            })
+            // There will always be 9 elements in locality
+            .unwrap();
+        let weather_kind = weather.get_kind();
+        weather_kind == WeatherKind::Rain || weather_kind == WeatherKind::Storm
+    }
 }

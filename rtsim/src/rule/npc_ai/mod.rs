@@ -61,7 +61,6 @@ use common::{
     terrain::{CoordinateConversions, TerrainChunkSize, sprite},
     time::DayPeriod,
     util::Dir,
-    weather::{WeatherGrid, WeatherKind},
 };
 use core::ops::ControlFlow;
 use fxhash::FxHasher64;
@@ -475,6 +474,7 @@ fn choose_plaza(ctx: &mut NpcCtx, site: SiteId) -> Option<Vec2<f32>> {
 
 const WALKING_SPEED: f32 = 0.35;
 
+#[inline(never)]
 fn villager(visiting_site: SiteId) -> impl Action<DefaultState> {
     choose(move |ctx, state: &mut DefaultState| {
         // Consider moving home if the home site gets too full
@@ -519,18 +519,18 @@ fn villager(visiting_site: SiteId) -> impl Action<DefaultState> {
                 .then(just(move |ctx, _| ctx.controller.set_new_home(new_home))));
         }
 
-        let weather = ctx.system_data.weather_grid.get_interpolated(ctx.npc.wpos.xy());
-        let weather_kind = weather.get_kind();
+        let is_raining = ctx.system_data.weather_grid.is_raining(ctx.npc.wpos.xy());
         let day_period = DayPeriod::from(ctx.time_of_day.0);
         let is_weekend = ctx.time_of_day.day() as u64 % 6 == 0;
         let is_evening = day_period == DayPeriod::Evening;
 
         let is_free_time = is_weekend || is_evening;
 
-        // Seek shelter if it's raining and the NPC is not a guard
-        if weather_kind == WeatherKind::Rain && !matches!(ctx.npc.profession(), Some(Profession::Guard)) {
+        // Go to a house if it's dark
+        if day_period.is_dark() && !matches!(ctx.npc.profession(), Some(Profession::Guard))
+        {
             return important(
-                now(move |ctx, _| { // `now` is used to evaluate house_wpos at runtime
+                now(move |ctx, _| {
                     if let Some(house_wpos) = ctx
                         .state
                         .data()
@@ -547,37 +547,26 @@ fn villager(visiting_site: SiteId) -> impl Action<DefaultState> {
                         })
                     {
                         just(|ctx, _| {
-                            ctx.controller
-                                .say(None, Content::localized("npc-speech-seeking_shelter_rain"))
+                                ctx.controller.say(None, Content::localized("npc-speech-night_time"))
                         })
                         .then(travel_to_point(house_wpos, 0.65))
-                        .debug(|| "villager walking to house due to rain") // Added debug message
-                        .then(
-                            socialize()
-                                .repeat()
-                                .map_state(|state: &mut DefaultState| &mut state.socialize_timer)
-                                .debug(|| "villager waiting in house due to rain") // Updated debug message
-                                .stop_if(|ctx: &mut NpcCtx| {
-                                    let weather = ctx.system_data.weather_grid.get_interpolated(ctx.npc.wpos.xy());
-                                    let weather_kind = weather.get_kind();
-                                    weather_kind != WeatherKind::Rain
-                                })
-                                .then(just(|ctx, _| {
-                                    ctx.controller
-                                        .say(None, Content::localized("npc-speech-rain_stopped"))
-                                }))
-                        )
+                        .debug(|| "walk to house")
+                        .then(socialize().repeat().map_state(|state: &mut DefaultState| &mut state.socialize_timer).debug(|| "wait in house"))
+                        .stop_if(|ctx: &mut NpcCtx| DayPeriod::from(ctx.time_of_day.0).is_light())
+                        .then(just(|ctx, _| {
+                                ctx.controller.say(None, Content::localized("npc-speech-day_time"))
+                        }))
                         .map(|_, _| ())
                         .boxed()
                     } else {
-                        // No house found, just finish this branch of important actions.
                         finish().boxed()
                     }
                 })
+                .debug(|| "find somewhere to sleep"),
             );
         }
-        // Go to a house if it's dark
-        else if day_period.is_dark()
+        // Go to a house if its raining
+        else if is_raining
             && !matches!(ctx.npc.profession(), Some(Profession::Guard))
         {
             return important(
@@ -598,16 +587,17 @@ fn villager(visiting_site: SiteId) -> impl Action<DefaultState> {
                         })
                     {
                         just(|ctx, _| {
-                            ctx.controller
-                                .say(None, Content::localized("npc-speech-night_time"))
+                                ctx.controller.say(None, Content::localized("npc-speech-seeking_shelter_rain"))
                         })
                         .then(travel_to_point(house_wpos, 0.65))
                         .debug(|| "walk to house")
                         .then(socialize().repeat().map_state(|state: &mut DefaultState| &mut state.socialize_timer).debug(|| "wait in house"))
-                        .stop_if(|ctx: &mut NpcCtx| DayPeriod::from(ctx.time_of_day.0).is_light())
+                        .stop_if(|ctx: &mut NpcCtx| {
+                                    let is_raining = ctx.system_data.weather_grid.is_raining(ctx.npc.wpos.xy());
+                                    !is_raining
+                    })
                         .then(just(|ctx, _| {
-                            ctx.controller
-                                .say(None, Content::localized("npc-speech-day_time"))
+                                ctx.controller.say(None, Content::localized("npc-speech-rain_stopped"))
                         }))
                         .map(|_, _| ())
                         .boxed()
