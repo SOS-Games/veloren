@@ -567,7 +567,7 @@ fn is_laterally_clear<V: BaseVol<Vox = Block> + ReadVol>(
         !vol.get(p).map_or(true, |b| b.is_solid()) &&
         !vol.get(p + Vec3::unit_z()).map_or(true, |b| b.is_solid())
     };
-    
+
     check_side(side_pos1) && check_side(side_pos2)
 }
 
@@ -691,9 +691,9 @@ where
             .map(move |dir| (pos, dir))
             .filter(move |(current_node_block_pos, move_dir_from_current)| {
                 let target_node_block_pos = *current_node_block_pos + **move_dir_from_current;
-                
+
                 // Original walkability check for the direct path segment
-                let main_path_walkable = traversal_cfg.can_fly || 
+                let main_path_walkable = traversal_cfg.can_fly ||
                     (is_walkable(current_node_block_pos) && is_walkable(&target_node_block_pos));
 
                 // New lateral clearance check
@@ -703,7 +703,7 @@ where
                 } else {
                     // Not a purely horizontal XY move, or no XY movement, so skip lateral check for now.
                     // Vertical or pure Z moves don't need this specific lateral check.
-                    true 
+                    true
                 };
 
                 // Existing Z-clearance checks (for jumps/falls and headroom)
@@ -718,7 +718,7 @@ where
                             .map(|b| !b.is_solid())
                             .unwrap_or(traversal_cfg.is_target_loaded))
                     && (move_dir_from_current.z >= 0 // Original check for falling/stepping down
-                        || vol 
+                        || vol
                             .get(target_node_block_pos + Vec3::unit_z() * 2) // Check headroom at destination of a downward step
                             .map(|b| !b.is_solid())
                             .unwrap_or(traversal_cfg.is_target_loaded));
