@@ -94,6 +94,8 @@ pub struct TraversalConfig {
     pub in_liquid: bool,
     /// The distance to the target below which it is considered reached.
     pub min_tgt_dist: f32,
+    /// The agent's radius for clearance checks.
+    pub agent_radius: f32,
     /// Whether the agent can climb.
     pub can_climb: bool,
     /// Whether the agent can fly.
@@ -382,62 +384,65 @@ impl Chaser {
         V: BaseVol<Vox = Block> + ReadVol,
     {
         span!(_guard, "chase", "Chaser::chase");
-        let pos_to_tgt = pos.distance(tgt);
 
-        // If we're already close to the target then there's nothing to do
-        let end = self
-            .route
-            .as_ref()
-            .and_then(|(r, _)| r.path.end().copied())
-            .map(|e| e.map(|e| e as f32 + 0.5))
-            .unwrap_or(tgt);
-        if ((pos - end) * Vec3::new(1.0, 1.0, 2.0)).magnitude_squared()
-            < traversal_cfg.min_tgt_dist.powi(2)
-        {
-            self.route = None;
-            return None;
-        }
-
-        let bearing = if let Some((end, complete)) = self
-            .route
-            .as_ref()
-            .and_then(|(r, complete)| Some((r.path().end().copied()?, *complete)))
-        {
-            let end_to_tgt = end.map(|e| e as f32).distance(tgt);
-            // If the target has moved significantly since the path was generated then it's
-            // time to search for a new path. Also, do this randomly from time
-            // to time to avoid any edge cases that cause us to get stuck. In
-            // theory this shouldn't happen, but in practice the world is full
-            // of unpredictable obstacles that are more than willing to mess up
-            // our day. TODO: Come up with a better heuristic for this
-            if end_to_tgt > pos_to_tgt * 0.3 + 5.0 && complete && traversal_cfg.is_target_loaded {
+        // Global Stuck Detection
+        if vel.magnitude_squared() < 0.2f32.powi(2) {
+            self.low_velocity_ticks += 1;
+            // Use a potentially longer threshold for this general stuck case.
+            if self.low_velocity_ticks > MAX_LOW_VELOCITY_TICKS * 2 {
+                self.low_velocity_ticks = 0;
+                self.route = None;
                 self.astar = None;
-                None
-            } else if vel.magnitude_squared() < 0.2f32.powi(2) && complete {
-                self.low_velocity_ticks += 1;
-                if self.low_velocity_ticks > MAX_LOW_VELOCITY_TICKS {
-                    self.low_velocity_ticks = 0;
-                    self.route = None;
-                    self.astar = None; // Force full A* replan
-                    None // Return None to indicate no bearing, triggering pathfinding
-                } else {
-                    // Still under threshold, continue current route if possible
-                    self.route
-                        .as_mut()
-                        .and_then(|(r, _)| r.traverse(vol, pos, vel, &traversal_cfg))
-                }
-            } else {
-                self.low_velocity_ticks = 0; // Reset if velocity is not low
-                self.route
-                    .as_mut()
-                    .and_then(|(r, _)| r.traverse(vol, pos, vel, &traversal_cfg))
+                // No immediate return here; let logic proceed to replanning if bearing becomes None.
             }
         } else {
-            // There is no route found yet
+            self.low_velocity_ticks = 0;
+        }
+
+        let pos_to_tgt = pos.distance(tgt);
+
+        // Path Completion Check
+        if let Some(route_data) = &self.route { // Check if route exists before trying to get its end
+            if let Some(end_node_pos_i32) = route_data.0.path.end() {
+                let end_node_center_f32 = end_node_pos_i32.map(|e| e as f32) + 0.5;
+                // Use agent_radius (from TraversalConfig) or min_tgt_dist, whichever is larger.
+                // Add a small buffer (e.g., 0.1) to agent_radius to ensure edge passes center slightly.
+                let effective_min_dist = (traversal_cfg.agent_radius + 0.1).max(traversal_cfg.min_tgt_dist);
+                if ((pos - end_node_center_f32) * Vec3::new(1.0, 1.0, 2.0)).magnitude_squared()
+                    < effective_min_dist.powi(2)
+                {
+                    self.route = None; // Path is done. Let logic continue to see if replan needed.
+                }
+            }
+        }
+
+        let bearing = if let Some((route_end_node_i32, route_is_complete_to_target)) = self.route.as_ref().and_then(|(r, c)| Some((r.path().end().copied()?, *c))) {
+            let route_end_node_f32 = route_end_node_i32.map(|e| e as f32);
+            if route_end_node_f32.distance(tgt) > pos_to_tgt * 0.3 + 5.0 && route_is_complete_to_target && traversal_cfg.is_target_loaded {
+                self.astar = None;
+                self.route = None; // Also clear route here
+                None
+            } else if vel.magnitude_squared() < 0.2f32.powi(2) && route_is_complete_to_target {
+                // This is the specific stuck-on-active-path.
+                // The global low_velocity_ticks has already been incremented by the global check.
+                if self.low_velocity_ticks > MAX_LOW_VELOCITY_TICKS { // Use the original shorter threshold
+                    self.low_velocity_ticks = 0; // Reset for this specific type of stuck
+                    self.route = None;
+                    self.astar = None;
+                    None
+                } else {
+                    self.route.as_mut().and_then(|(r, _)| r.traverse(vol, pos, vel, &traversal_cfg))
+                }
+            } else {
+                // Not stuck on active path, velocity is fine OR path is incomplete.
+                // Global low_velocity_ticks would have been reset if velocity was fine by the global check.
+                self.route.as_mut().and_then(|(r, _)| r.traverse(vol, pos, vel, &traversal_cfg))
+            }
+        } else { // self.route is None (no current route, or cleared by completion/stuck checks)
             None
         };
 
-        // If a bearing has already been determined, use that
+        // If a bearing has already been determined through the above logic, use that
         if let Some((bearing, speed)) = bearing {
             Some((bearing, speed))
         } else {

@@ -156,13 +156,17 @@ impl AgentData<'_> {
         // then reroute if needed.
         let is_target_loaded = in_loaded_chunk(pathing_pos);
 
+        let agent_radius = self.body.map_or(0.5, |b| b.max_radius()) * self.scale;
+        let calculated_min_tgt_dist = (agent_radius + 0.1).max(0.25);
+
         if let Some((bearing, speed)) = agent.chaser.chase(
             &*read_data.terrain,
             self.pos.0,
             self.vel.0,
             pathing_pos,
             TraversalConfig {
-                min_tgt_dist: 0.25,
+                min_tgt_dist: calculated_min_tgt_dist,
+                agent_radius,
                 is_target_loaded,
                 ..self.traversal_config
             },
