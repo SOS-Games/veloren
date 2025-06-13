@@ -1,6 +1,6 @@
 use crate::{
     astar::{Astar, PathResult},
-    terrain::Block,
+    terrain::{Block, BlockKind}, // Added BlockKind here
     vol::{BaseVol, ReadVol},
 };
 use common_base::span;
@@ -361,7 +361,10 @@ pub struct Chaser {
     /// (2) we want this to be constant across compiles because of hot-reloading
     /// (Ruling out AAHash);
     astar: Option<Astar<Node, FxBuildHasher>>,
+    low_velocity_ticks: u32, // New field for stuck detection
 }
+
+const MAX_LOW_VELOCITY_TICKS: u32 = 120; // Threshold for stuck detection
 
 impl Chaser {
     /// Returns bearing and speed
@@ -410,13 +413,21 @@ impl Chaser {
             if end_to_tgt > pos_to_tgt * 0.3 + 5.0 && complete && traversal_cfg.is_target_loaded {
                 self.astar = None;
                 None
-            } else if vel.magnitude_squared() < 0.2f32.powi(2)
-                && thread_rng().gen::<f32>() < 0.0025
-                && complete
-            {
-                self.route = None;
-                None
+            } else if vel.magnitude_squared() < 0.2f32.powi(2) && complete {
+                self.low_velocity_ticks += 1;
+                if self.low_velocity_ticks > MAX_LOW_VELOCITY_TICKS {
+                    self.low_velocity_ticks = 0;
+                    self.route = None;
+                    self.astar = None; // Force full A* replan
+                    None // Return None to indicate no bearing, triggering pathfinding
+                } else {
+                    // Still under threshold, continue current route if possible
+                    self.route
+                        .as_mut()
+                        .and_then(|(r, _)| r.traverse(vol, pos, vel, &traversal_cfg))
+                }
             } else {
+                self.low_velocity_ticks = 0; // Reset if velocity is not low
                 self.route
                     .as_mut()
                     .and_then(|(r, _)| r.traverse(vol, pos, vel, &traversal_cfg))
@@ -522,17 +533,21 @@ fn walkable<V>(vol: &V, pos: Vec3<i32>) -> bool
 where
     V: BaseVol<Vox = Block> + ReadVol,
 {
+    // Define a default solid block to use when a block is outside loaded volume
+    // Assumes Rgb and BlockKind::Rock are available.
+    let default_solid_block = Block::new(BlockKind::Rock, Rgb::new(0,0,0));
+
     let below = vol
         .get(pos - Vec3::unit_z())
         .ok()
         .copied()
-        .unwrap_or_else(Block::empty);
-    let a = vol.get(pos).ok().copied().unwrap_or_else(Block::empty);
+        .unwrap_or_else(|| default_solid_block);
+    let a = vol.get(pos).ok().copied().unwrap_or_else(|| default_solid_block);
     let b = vol
         .get(pos + Vec3::unit_z())
         .ok()
         .copied()
-        .unwrap_or_else(Block::empty);
+        .unwrap_or_else(|| default_solid_block);
 
     let on_ground = below.is_filled();
     let in_liquid = a.is_liquid();
